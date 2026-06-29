@@ -1,0 +1,8 @@
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/database.dir
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue.dir
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue-build.dir
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue-configure.dir
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue-executes.dir
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue-database.dir
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/edit_cache.dir
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/rebuild_cache.dir

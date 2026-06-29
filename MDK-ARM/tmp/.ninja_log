@@ -1,0 +1,15 @@
+# ninja log v7
+2	101	8039720162713340	chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-mkdir	311a708afe88f659
+2	101	8039720162713340	C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-mkdir	311a708afe88f659
+102	209	8039720163808881	chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-download	34541a4dee310f9b
+102	209	8039720163808881	C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-download	34541a4dee310f9b
+209	337	8039720165105708	chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-update	bf084c7525487e21
+209	337	8039720165105708	C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-update	bf084c7525487e21
+338	450	8039720166230417	chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-patch	c914c26e624c6bde
+338	450	8039720166230417	C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-patch	c914c26e624c6bde
+450	4391	8039720205630287	chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-configure	1318bd67a1909699
+450	4391	8039720205630287	C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-configure	1318bd67a1909699
+1	715	8039932292777122	chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-database	8579eb52ba4c8b26
+1	715	8039932292777122	C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-database	8579eb52ba4c8b26
+3	170	8041436977936895	chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-database	8579eb52ba4c8b26
+3	170	8041436977936895	C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-database	8579eb52ba4c8b26

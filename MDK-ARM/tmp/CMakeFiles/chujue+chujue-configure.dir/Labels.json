@@ -1,0 +1,34 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue-configure"
+		},
+		{
+			"file" : "C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue-configure.rule"
+		},
+		{
+			"file" : "C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-configure.rule"
+		},
+		{
+			"file" : "C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-patch.rule"
+		},
+		{
+			"file" : "C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-update.rule"
+		},
+		{
+			"file" : "C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-download.rule"
+		},
+		{
+			"file" : "C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-mkdir.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"chujue+chujue"
+		],
+		"name" : "chujue+chujue-configure"
+	}
+}

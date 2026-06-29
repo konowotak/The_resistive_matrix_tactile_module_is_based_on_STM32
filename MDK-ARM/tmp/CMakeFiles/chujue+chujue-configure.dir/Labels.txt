@@ -1,0 +1,10 @@
+# Target labels
+ chujue+chujue
+# Source files and their labels
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue-configure
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue-configure.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-configure.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-patch.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-update.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-download.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-mkdir.rule

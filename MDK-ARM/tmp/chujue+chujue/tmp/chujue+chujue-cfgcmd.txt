@@ -1,0 +1,1 @@
+cmd='C:/Users/ldpine/.vcpkg/artifacts/2139c4c6/tools.kitware.cmake/3.31.5/bin/cmake.exe;-G;Ninja;-S;<SOURCE_DIR>;-B;<BINARY_DIR>;-DSOLUTION_ROOT=C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM;-DCMSIS_PACK_ROOT=C:/Users/ldpine/AppData/Local/stm32cube/packs;-DCMSIS_COMPILER_ROOT=C:/Users/ldpine/.vscode/extensions/arm.cmsis-csolution-1.68.0-win32-x64/tools/cmsis-toolbox/etc'

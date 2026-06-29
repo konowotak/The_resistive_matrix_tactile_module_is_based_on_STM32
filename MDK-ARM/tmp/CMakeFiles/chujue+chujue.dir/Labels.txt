@@ -1,0 +1,16 @@
+# Target labels
+ chujue+chujue
+# Source files and their labels
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/CMakeFiles/chujue+chujue-complete.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-build.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-configure.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-database.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-download.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-executes.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-install.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-mkdir.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-patch.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-test.rule
+C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/tmp/chujue+chujue/src/chujue+chujue-stamp/chujue+chujue-update.rule

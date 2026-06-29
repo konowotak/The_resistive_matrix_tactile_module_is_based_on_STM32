@@ -1,0 +1,6 @@
+CompileFlags:
+  CompilationDatabase: c:\Users\ldpine\Desktop\New Folder\chujue\MDK-ARM\out\chujue\chujue
+  Add:
+    - -include
+    - c:\Users\ldpine\Desktop\New
+      Folder\chujue\MDK-ARM\out\chujue\chujue\compile_macros.h

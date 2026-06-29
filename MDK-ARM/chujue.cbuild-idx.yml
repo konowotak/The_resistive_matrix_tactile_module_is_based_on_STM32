@@ -1,0 +1,21 @@
+build-idx:
+  generated-by: csolution version 2.14.1+p9-g859cb6c9
+  csolution: chujue.csolution.yml
+  cbuild-run: out/chujue+chujue.cbuild-run.yml
+  tmpdir: tmp
+  cprojects:
+    - cproject: chujue.cproject.yml
+  cbuilds:
+    - cbuild: out/chujue/chujue/chujue+chujue.cbuild.yml
+      project: chujue
+      configuration: +chujue
+      messages:
+        warnings:
+          - file 'C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/.cmsis/chujue+chujue.dbgconf' not found; use --update-rte
+        info:
+          - chujue.cbuild-pack.yml - file is already up-to-date
+          - chujue+chujue.cbuild-run.yml - file is already up-to-date
+          - chujue+chujue.cbuild.yml - file is already up-to-date
+      packs-unused:
+        - pack: ARM::CMSIS-DSP@1.17.0
+        - pack: ARM::CMSIS-NN@4.1.0
