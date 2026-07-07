@@ -1,7 +1,6 @@
 build-idx:
   generated-by: csolution version 2.14.1+p9-g859cb6c9
   csolution: chujue.csolution.yml
-  cbuild-run: out/chujue+chujue.cbuild-run.yml
   tmpdir: tmp
   cprojects:
     - cproject: chujue.cproject.yml
@@ -9,13 +8,20 @@ build-idx:
     - cbuild: out/chujue/chujue/chujue+chujue.cbuild.yml
       project: chujue
       configuration: +chujue
+      errors: true
       messages:
+        errors:
+          - "required pack: Keil::STM32F1xx_DFP@2.4.1 not installed, version fixed in *.cbuild-pack.yml file"
+          - "specified device 'STM32F103C8' not found in the installed packs. Use:\n  cpackget add Vendor::PackName"
+          - processing context 'chujue+chujue' failed
         warnings:
-          - file 'C:/Users/ldpine/Desktop/New Folder/chujue/MDK-ARM/.cmsis/chujue+chujue.dbgconf' not found; use --update-rte
+          - no compiler registered. Add path to compiler 'bin' directory with environment variable <name>_TOOLCHAIN_<major>_<minor>_<patch>. <name> is one of AC6, GCC, IAR, CLANG
         info:
           - chujue.cbuild-pack.yml - file is already up-to-date
-          - chujue+chujue.cbuild-run.yml - file is already up-to-date
-          - chujue+chujue.cbuild.yml - file is already up-to-date
+          - chujue+chujue.cbuild.yml - file generated successfully
+      packs-missing:
+        - pack: Keil::STM32F1xx_DFP@2.4.1
       packs-unused:
+        - pack: ARM::CMSIS@5.0.1
         - pack: ARM::CMSIS-DSP@1.17.0
         - pack: ARM::CMSIS-NN@4.1.0

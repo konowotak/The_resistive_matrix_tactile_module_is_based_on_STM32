@@ -141,7 +141,7 @@ class MatrixViewer(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("电阻矩阵可视化 — 8×8 热力图")
-        self.geometry("780x880")
+        self.geometry("950x900")
         self.resizable(False, False)
 
         self.matrix = [[0] * ADC_COUNT for _ in range(EXC_COUNT)]
@@ -164,6 +164,18 @@ class MatrixViewer(tk.Tk):
         # 调零偏移量
         self._zero_offsets = [[0] * ADC_COUNT for _ in range(EXC_COUNT)]
         self._has_zero = False
+
+        # 行列标签（可变副本，变换时会更新）
+        self._row_labels = list(EXC_LABELS)
+        self._col_labels = list(ADC_LABELS)
+
+        # Checkbutton 引用（用于变换后更新标签文字）
+        self._row_cbs: list[ttk.Checkbutton] = []
+        self._col_cbs: list[ttk.Checkbutton] = []
+
+        # 变换状态：记录已应用的操作序列，新数据到达时自动重放
+        # 'T' = 转置, 'R' = 顺时针旋转90°
+        self._transforms: list[str] = []
 
         self.reader = SerialReader()
         # 关键：串口线程回调 → 通过 after() 转到主线程更新 UI
@@ -216,11 +228,13 @@ class MatrixViewer(tk.Tk):
 
         ttk.Label(row_line, text="激励(行):", width=9).pack(side=tk.LEFT)
 
-        for i, label in enumerate(EXC_LABELS):
+        self._row_cbs.clear()
+        for i, label in enumerate(self._row_labels):
             cb = ttk.Checkbutton(
                 row_line, text=label, variable=self._row_visible[i],
                 command=self._on_channel_toggle)
             cb.pack(side=tk.LEFT, padx=3)
+            self._row_cbs.append(cb)
 
         ttk.Separator(row_line, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
 
@@ -237,11 +251,13 @@ class MatrixViewer(tk.Tk):
 
         ttk.Label(col_line, text="ADC(列):", width=9).pack(side=tk.LEFT)
 
-        for i, label in enumerate(ADC_LABELS):
+        self._col_cbs.clear()
+        for i, label in enumerate(self._col_labels):
             cb = ttk.Checkbutton(
                 col_line, text=label, variable=self._col_visible[i],
                 command=self._on_channel_toggle)
             cb.pack(side=tk.LEFT, padx=3)
+            self._col_cbs.append(cb)
 
         ttk.Separator(col_line, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
 
@@ -322,6 +338,16 @@ class MatrixViewer(tk.Tk):
         self._scale_vmax.set(ADC_MAX_VAL)
         self._scale_vmax.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+        # 第三行：矩阵方向变换按钮
+        ctrl_row3 = ttk.Frame(bottom)
+        ctrl_row3.pack(fill=tk.X, pady=(8, 0))
+
+        ttk.Label(ctrl_row3, text="方向校正:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(ctrl_row3, text="转置（反转）",
+                   command=self._transpose_matrix).pack(side=tk.LEFT, padx=2)
+        ttk.Button(ctrl_row3, text="旋转90°",
+                   command=self._rotate90_matrix).pack(side=tk.LEFT, padx=2)
+
     def _draw_legend(self):
         w = 200
         self._canvas_legend.delete("all")
@@ -372,6 +398,85 @@ class MatrixViewer(tk.Tk):
         for v in self._col_visible:
             v.set(not v.get())
         self._draw_grid()
+
+    # ── 矩阵方向变换 ────────────────────────────────────────────────
+    @staticmethod
+    def _apply_transpose(matrix: list[list[int]]) -> list[list[int]]:
+        """返回转置后的新矩阵（纯函数）。"""
+        new = [[0] * ADC_COUNT for _ in range(EXC_COUNT)]
+        for r in range(EXC_COUNT):
+            for c in range(ADC_COUNT):
+                new[c][r] = matrix[r][c]
+        return new
+
+    @staticmethod
+    def _apply_rotate90(matrix: list[list[int]]) -> list[list[int]]:
+        """返回顺时针旋转 90° 后的新矩阵（纯函数）。"""
+        N = EXC_COUNT
+        new = [[0] * ADC_COUNT for _ in range(EXC_COUNT)]
+        for r in range(N):
+            for c in range(N):
+                new[c][N - 1 - r] = matrix[r][c]
+        return new
+
+    def _apply_all_transforms(self, matrix: list[list[int]]) -> list[list[int]]:
+        """将累积的变换操作依次应用到矩阵上。"""
+        for op in self._transforms:
+            if op == 'T':
+                matrix = self._apply_transpose(matrix)
+            elif op == 'R':
+                matrix = self._apply_rotate90(matrix)
+        return matrix
+
+    def _transpose_matrix(self):
+        """转置矩阵：行列互换（手动反转）。"""
+        old_row_labels = list(self._row_labels)
+        old_col_labels = list(self._col_labels)
+        old_row_vis = [v.get() for v in self._row_visible]
+        old_col_vis = [v.get() for v in self._col_visible]
+        old_zero = [row[:] for row in self._zero_offsets]
+
+        self.matrix = self._apply_transpose(self.matrix)
+        self._zero_offsets = self._apply_transpose(old_zero)
+        self._row_labels = list(old_col_labels)
+        self._col_labels = list(old_row_labels)
+        for i in range(EXC_COUNT):
+            self._row_visible[i].set(old_col_vis[i])
+            self._col_visible[i].set(old_row_vis[i])
+
+        # 记录操作（用于后续串口数据自动变换）
+        self._transforms.append('T')
+        self._sync_checkbutton_labels()
+        self._draw_grid()
+
+    def _rotate90_matrix(self):
+        """顺时针旋转 90 度。"""
+        old_row_labels = list(self._row_labels)
+        old_col_labels = list(self._col_labels)
+        old_row_vis = [v.get() for v in self._row_visible]
+        old_col_vis = [v.get() for v in self._col_visible]
+        old_zero = [row[:] for row in self._zero_offsets]
+
+        self.matrix = self._apply_rotate90(self.matrix)
+        self._zero_offsets = self._apply_rotate90(old_zero)
+        self._row_labels = list(reversed(old_col_labels))
+        self._col_labels = list(old_row_labels)
+        N = EXC_COUNT
+        for i in range(N):
+            self._row_visible[i].set(old_col_vis[N - 1 - i])
+            self._col_visible[i].set(old_row_vis[i])
+
+        # 记录操作（用于后续串口数据自动变换）
+        self._transforms.append('R')
+        self._sync_checkbutton_labels()
+        self._draw_grid()
+
+    def _sync_checkbutton_labels(self):
+        """根据当前行列标签更新 Checkbutton 文字。"""
+        for i, cb in enumerate(self._row_cbs):
+            cb.config(text=self._row_labels[i])
+        for i, cb in enumerate(self._col_cbs):
+            cb.config(text=self._col_labels[i])
 
     # ── 调零功能 ────────────────────────────────────────────────────
     def _zero_calibrate(self):
@@ -471,7 +576,7 @@ class MatrixViewer(tk.Tk):
         # 列标题（仅可见的 ADC 通道）
         for c in vis_cols:
             gj = col_to_grid[c]
-            lbl = ttk.Label(self._grid_frame, text=ADC_LABELS[c],
+            lbl = ttk.Label(self._grid_frame, text=self._col_labels[c],
                             font=("Consolas", 9, "bold"), anchor=tk.CENTER)
             lbl.grid(row=0, column=gj, sticky="nsew", padx=1, pady=1, ipadx=6, ipady=2)
 
@@ -479,7 +584,7 @@ class MatrixViewer(tk.Tk):
         for r in vis_rows:
             gr = row_to_grid[r]
             # 行标题
-            lbl = ttk.Label(self._grid_frame, text=EXC_LABELS[r],
+            lbl = ttk.Label(self._grid_frame, text=self._row_labels[r],
                             font=("Consolas", 9, "bold"), anchor=tk.CENTER,
                             width=6)
             lbl.grid(row=gr, column=0, sticky="nsew", padx=1, pady=1)
@@ -533,9 +638,10 @@ class MatrixViewer(tk.Tk):
     # ── 数据处理（仅主线程调用）─────────────────────────────────────
     def _do_update_matrix(self, matrix: list[list[int]]):
         """在主线程中更新矩阵数据并刷新显示。"""
-        self.matrix = matrix
+        # 对原始数据应用累积的方向变换
+        self.matrix = self._apply_all_transforms(matrix)
         if self._auto_range.get():
-            display = self._apply_zero(matrix)
+            display = self._apply_zero(self.matrix)
             vis_rows = self._get_visible_rows()
             vis_cols = self._get_visible_cols()
             if vis_rows and vis_cols:
