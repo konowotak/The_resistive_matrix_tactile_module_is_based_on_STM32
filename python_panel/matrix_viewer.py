@@ -6,6 +6,9 @@
   [0xFF] [0xAA] [64 个采样 × 4B: exc_id, adc_ch, val_hi, val_lo]
 """
 
+from collections import deque
+import math
+import statistics
 import sys
 import threading
 import time
@@ -22,6 +25,13 @@ SYNC_HI     = 0xFF
 SYNC_LO     = 0xAA
 FRAME_SIZE  = 2 + EXC_COUNT * ADC_COUNT * 4   # 258 字节
 ADC_MAX_VAL = 4095                             # 12-bit ADC 满量程
+
+# ── 滤波默认参数 ──────────────────────────────────────────────────────
+DEFAULT_DEADZONE         = 100       # 死区阈值（低于此值的读数强制归零）
+DEFAULT_SPATIAL_SIGMA    = 0.8       # 高斯模糊 σ（越大越模糊）
+DEFAULT_DENOISE_SIGMA    = 2.5       # 椒盐去噪 σ 阈值（越小越激进，剔除越多）
+DEFAULT_GHOST_THRESHOLD  = 80        # 去鬼影活性阈值（低于此值不参与连通域计算）
+
 
 # 激励引脚标签（与 STM32 sm_exc_pins 顺序一致）
 EXC_LABELS = ["PB7", "PB6", "PB5", "PB4", "PB0", "PB1", "PB10", "PB11"]
@@ -141,7 +151,7 @@ class MatrixViewer(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("电阻矩阵可视化 — 8×8 热力图")
-        self.geometry("950x900")
+        self.geometry("1280x1140")
         self.resizable(False, False)
 
         self.matrix = [[0] * ADC_COUNT for _ in range(EXC_COUNT)]
@@ -164,6 +174,35 @@ class MatrixViewer(tk.Tk):
         # 调零偏移量
         self._zero_offsets = [[0] * ADC_COUNT for _ in range(EXC_COUNT)]
         self._has_zero = False
+
+        # 单格响应增益（默认 1.0，点击上半部分 +0.1，下半部分 -0.1）
+        self._gains: list[list[float]] = [[1.0] * ADC_COUNT for _ in range(EXC_COUNT)]
+        self.show_gains = tk.BooleanVar(value=True)
+
+        # 死区阈值
+        self._deadzone = tk.IntVar(value=DEFAULT_DEADZONE)
+
+        # 空间滤波状态
+        self._spatial_mode = tk.StringVar(value="none")   # "none" | "gaussian" | "median"
+        self._spatial_sigma = tk.DoubleVar(value=DEFAULT_SPATIAL_SIGMA)
+
+        # 椒盐去噪状态（独立于空间滤波的后处理）
+        self._use_denoise = tk.BooleanVar(value=False)
+        self._denoise_sigma = tk.DoubleVar(value=DEFAULT_DENOISE_SIGMA)
+
+        # 去鬼影状态（连通域分析，保留最大团）
+        self._use_ghost_removal = tk.BooleanVar(value=False)
+        self._ghost_threshold = tk.IntVar(value=DEFAULT_GHOST_THRESHOLD)
+        self._ghost_cluster_count = 0      # 当前帧检测到的触摸群数量
+
+        # 滑移检测状态
+        self._cop_x = 3.5          # 压力中心 x（列，浮点）
+        self._cop_y = 3.5          # 压力中心 y（行，浮点）
+        self._cop_history: deque[tuple[float, float]] = deque(maxlen=8)
+        self._slip_dx = 0.0        # 平滑后的移动方向 x
+        self._slip_dy = 0.0        # 平滑后的移动方向 y
+        self._slip_speed = 0.0     # 移动速率
+        self._is_touching = False  # 当前是否有有效按压
 
         # 行列标签（可变副本，变换时会更新）
         self._row_labels = list(EXC_LABELS)
@@ -268,9 +307,32 @@ class MatrixViewer(tk.Tk):
         ttk.Button(col_line, text="反选", width=4,
                    command=self._invert_cols).pack(side=tk.LEFT, padx=2)
 
-        # ---- 网格区域 ----
-        self._grid_frame = ttk.Frame(self)
-        self._grid_frame.pack(expand=True, pady=5)
+        # ---- 主显示区域（网格 + 滑移面板）----
+        main_area = ttk.Frame(self)
+        main_area.pack(expand=True, fill=tk.BOTH, pady=5, padx=10)
+
+        # 网格区域（左侧）
+        self._grid_frame = ttk.Frame(main_area)
+        self._grid_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
+
+        # 滑移检测面板（右侧）
+        slip_panel = ttk.LabelFrame(main_area, text="滑移检测")
+        slip_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
+
+        self._slip_canvas = tk.Canvas(
+            slip_panel, width=190, height=250,
+            bg="#f0f0f0", highlightthickness=0)
+        self._slip_canvas.pack(padx=12, pady=(12, 0))
+
+        self._lbl_slip_dir = ttk.Label(
+            slip_panel, text="等待按压…", anchor=tk.CENTER,
+            font=("微软雅黑", 10, "bold"))
+        self._lbl_slip_dir.pack(pady=(8, 2))
+
+        self._lbl_slip_speed = ttk.Label(
+            slip_panel, text="", anchor=tk.CENTER,
+            font=("Consolas", 9), foreground="gray")
+        self._lbl_slip_speed.pack(pady=(0, 10))
 
         # ---- 底部栏：控制 ----
         bottom = ttk.Frame(self)
@@ -283,6 +345,10 @@ class MatrixViewer(tk.Tk):
         ttk.Checkbutton(
             ctrl_row1, text="显示数值", variable=self.show_values,
             command=self._toggle_values).pack(side=tk.LEFT)
+
+        ttk.Checkbutton(
+            ctrl_row1, text="显示增益", variable=self.show_gains,
+            command=self._toggle_gains_display).pack(side=tk.LEFT, padx=10)
 
         ttk.Checkbutton(
             ctrl_row1, text="自动量程", variable=self._auto_range,
@@ -312,6 +378,10 @@ class MatrixViewer(tk.Tk):
         self._btn_unzero = ttk.Button(
             ctrl_row1, text="取消调零", command=self._cancel_zero, state=tk.DISABLED)
         self._btn_unzero.pack(side=tk.LEFT, padx=2)
+
+        self._btn_reset_gains = ttk.Button(
+            ctrl_row1, text="重置增益", command=self._reset_gains)
+        self._btn_reset_gains.pack(side=tk.LEFT, padx=5)
 
         # 图例（第一行右侧）
         self._canvas_legend = tk.Canvas(
@@ -347,6 +417,114 @@ class MatrixViewer(tk.Tk):
                    command=self._transpose_matrix).pack(side=tk.LEFT, padx=2)
         ttk.Button(ctrl_row3, text="旋转90°",
                    command=self._rotate90_matrix).pack(side=tk.LEFT, padx=2)
+
+        # ---- 滤波设置 ----
+        filt_frame = ttk.LabelFrame(bottom, text="滤波设置")
+        filt_frame.pack(fill=tk.X, pady=(8, 0))
+
+        # 第一行：死区阈值
+        filt_row1 = ttk.Frame(filt_frame)
+        filt_row1.pack(fill=tk.X, pady=(5, 2), padx=5)
+
+        ttk.Label(filt_row1, text="死区阈值:").pack(side=tk.LEFT, padx=(0, 3))
+        self._scale_deadzone = ttk.Scale(
+            filt_row1, from_=0, to=500, orient=tk.HORIZONTAL, length=120,
+            variable=self._deadzone, command=self._on_filter_param_change)
+        self._scale_deadzone.pack(side=tk.LEFT)
+        self._lbl_deadzone = ttk.Label(
+            filt_row1, text=str(DEFAULT_DEADZONE), width=4, anchor=tk.W)
+        self._lbl_deadzone.pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(filt_row1, text="低于阈值的读数强制归零",
+                  foreground="gray").pack(side=tk.LEFT, padx=8)
+
+        # 第二行：空间滤波
+        filt_row2 = ttk.Frame(filt_frame)
+        filt_row2.pack(fill=tk.X, pady=(2, 5), padx=5)
+
+        ttk.Label(filt_row2, text="空间:").pack(side=tk.LEFT)
+        for mode, label in [("none", "无"), ("gaussian", "高斯模糊"), ("median", "中值滤波")]:
+            ttk.Radiobutton(
+                filt_row2, text=label, variable=self._spatial_mode, value=mode,
+                command=self._on_spatial_mode_change
+            ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Separator(filt_row2, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=8)
+
+        # 高斯 σ
+        ttk.Label(filt_row2, text="σ(高斯):").pack(side=tk.LEFT, padx=(0, 3))
+        self._scale_sigma = ttk.Scale(
+            filt_row2, from_=30, to=250, orient=tk.HORIZONTAL, length=100,
+            command=self._on_sigma_change)
+        self._scale_sigma.set(int(DEFAULT_SPATIAL_SIGMA * 100))
+        self._scale_sigma.pack(side=tk.LEFT)
+        self._lbl_sigma = ttk.Label(
+            filt_row2, text=f"{DEFAULT_SPATIAL_SIGMA:.2f}", width=4, anchor=tk.W)
+        self._lbl_sigma.pack(side=tk.LEFT, padx=2)
+
+        ttk.Separator(filt_row2, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=8)
+
+        ttk.Label(filt_row2, text="中值滤波固定 3×3 窗口",
+                  foreground="gray").pack(side=tk.LEFT, padx=5)
+
+        # 第三行：椒盐去噪（独立后处理）
+        filt_row3 = ttk.Frame(filt_frame)
+        filt_row3.pack(fill=tk.X, pady=(2, 5), padx=5)
+
+        self._cb_denoise = ttk.Checkbutton(
+            filt_row3, text="椒盐去噪", variable=self._use_denoise,
+            command=self._on_denoise_toggle)
+        self._cb_denoise.pack(side=tk.LEFT)
+
+        ttk.Separator(filt_row3, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=8)
+
+        ttk.Label(filt_row3, text="σ 阈值:").pack(side=tk.LEFT, padx=(0, 3))
+        self._scale_denoise = ttk.Scale(
+            filt_row3, from_=10, to=60, orient=tk.HORIZONTAL, length=120,
+            command=self._on_denoise_sigma_change)
+        self._scale_denoise.set(int(DEFAULT_DENOISE_SIGMA * 10))
+        self._scale_denoise.pack(side=tk.LEFT)
+        self._lbl_denoise = ttk.Label(
+            filt_row3, text=f"{DEFAULT_DENOISE_SIGMA:.1f}", width=4, anchor=tk.W)
+        self._lbl_denoise.pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(filt_row3, text="MAD离群检测 · 3×3邻域",
+                  foreground="gray").pack(side=tk.LEFT, padx=8)
+
+        ttk.Label(filt_row3, text="σ 越小剔除越激进",
+                  foreground="gray").pack(side=tk.RIGHT, padx=5)
+
+        # 第四行：去鬼影（连通域分析）
+        filt_row4 = ttk.Frame(filt_frame)
+        filt_row4.pack(fill=tk.X, pady=(2, 5), padx=5)
+
+        self._cb_ghost = ttk.Checkbutton(
+            filt_row4, text="去鬼影", variable=self._use_ghost_removal,
+            command=self._on_ghost_toggle)
+        self._cb_ghost.pack(side=tk.LEFT)
+
+        ttk.Separator(filt_row4, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=8)
+
+        ttk.Label(filt_row4, text="活性阈值:").pack(side=tk.LEFT, padx=(0, 3))
+        self._scale_ghost = ttk.Scale(
+            filt_row4, from_=20, to=500, orient=tk.HORIZONTAL, length=120,
+            command=self._on_ghost_threshold_change)
+        self._scale_ghost.set(DEFAULT_GHOST_THRESHOLD)
+        self._scale_ghost.pack(side=tk.LEFT)
+        self._lbl_ghost = ttk.Label(
+            filt_row4, text=str(DEFAULT_GHOST_THRESHOLD), width=4, anchor=tk.W)
+        self._lbl_ghost.pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(filt_row4, text="BFS 8-连通 · 只保留质量最大群",
+                  foreground="gray").pack(side=tk.LEFT, padx=8)
+
+        self._lbl_ghost_info = ttk.Label(
+            filt_row4, text="", foreground="#2196F3")
+        self._lbl_ghost_info.pack(side=tk.RIGHT, padx=5)
 
     def _draw_legend(self):
         w = 200
@@ -435,9 +613,11 @@ class MatrixViewer(tk.Tk):
         old_row_vis = [v.get() for v in self._row_visible]
         old_col_vis = [v.get() for v in self._col_visible]
         old_zero = [row[:] for row in self._zero_offsets]
+        old_gains = [row[:] for row in self._gains]
 
         self.matrix = self._apply_transpose(self.matrix)
         self._zero_offsets = self._apply_transpose(old_zero)
+        self._gains = self._apply_transpose(old_gains)
         self._row_labels = list(old_col_labels)
         self._col_labels = list(old_row_labels)
         for i in range(EXC_COUNT):
@@ -456,10 +636,11 @@ class MatrixViewer(tk.Tk):
         old_row_vis = [v.get() for v in self._row_visible]
         old_col_vis = [v.get() for v in self._col_visible]
         old_zero = [row[:] for row in self._zero_offsets]
+        old_gains = [row[:] for row in self._gains]
 
         self.matrix = self._apply_rotate90(self.matrix)
         self._zero_offsets = self._apply_rotate90(old_zero)
-        self._row_labels = list(reversed(old_col_labels))
+        self._gains = self._apply_rotate90(old_gains)
         self._col_labels = list(old_row_labels)
         N = EXC_COUNT
         for i in range(N):
@@ -504,6 +685,49 @@ class MatrixViewer(tk.Tk):
             for c in range(ADC_COUNT):
                 result[r][c] = max(0, matrix[r][c] - self._zero_offsets[r][c])
         return result
+
+    def _apply_gains_and_zero(self, matrix: list[list[int]]) -> list[list[int]]:
+        """先应用单格增益，再应用零点偏移，确保结果非负。"""
+        result = [[0] * ADC_COUNT for _ in range(EXC_COUNT)]
+        for r in range(EXC_COUNT):
+            for c in range(ADC_COUNT):
+                scaled = int(matrix[r][c] * self._gains[r][c])
+                offset = self._zero_offsets[r][c] if self._has_zero else 0
+                result[r][c] = max(0, scaled - offset)
+        return result
+
+    # ── 增益调节 ────────────────────────────────────────────────────
+    def _on_gain_click(self, event: tk.Event):
+        """点击格子上半部分 +0.1 增益，下半部分 -0.1。"""
+        widget = event.widget
+        r = getattr(widget, 'r', None)
+        c = getattr(widget, 'c', None)
+        if r is None or c is None:
+            return
+
+        delta = +0.1 if event.y < widget.winfo_height() / 2 else -0.1
+        new_gain = round(self._gains[r][c] + delta, 1)
+        new_gain = max(0.1, min(10.0, new_gain))
+
+        if new_gain == self._gains[r][c]:
+            return   # 已达边界，无变化
+
+        self._gains[r][c] = new_gain
+
+        # 视觉反馈：短暂凹陷效果
+        widget.configure(relief=tk.SUNKEN)
+        widget.after(150, lambda w=widget: w.configure(relief=tk.RIDGE))
+
+        self._apply_colours()
+
+    def _reset_gains(self):
+        """重置所有格子的增益为 1.0。"""
+        self._gains = [[1.0] * ADC_COUNT for _ in range(EXC_COUNT)]
+        self._apply_colours()
+
+    def _toggle_gains_display(self):
+        """切换是否在格子上显示增益倍率。"""
+        self._apply_colours()
 
     # ── 颜色范围滑动条 ──────────────────────────────────────────────
     def _on_slider_vmin(self, value):
@@ -602,6 +826,9 @@ class MatrixViewer(tk.Tk):
                     width=8, height=3,
                     anchor=tk.CENTER,
                 )
+                lbl.r = r   # 存储矩阵行索引
+                lbl.c = c   # 存储矩阵列索引
+                lbl.bind("<Button-1>", self._on_gain_click)
                 lbl.grid(row=gr, column=gj, sticky="nsew", padx=1, pady=1)
                 row_cells.append(lbl)
             self._cells.append(row_cells)
@@ -619,17 +846,26 @@ class MatrixViewer(tk.Tk):
         if not vis_rows or not vis_cols or not self._cells:
             return
 
-        display = self._apply_zero(self.matrix)
+        display = self._apply_gains_and_zero(self.matrix)
 
         for gi, r in enumerate(vis_rows):
             for gj, c in enumerate(vis_cols):
                 val = display[r][c]
                 norm = (val - vmin) / rng
                 fg = "white" if norm > 0.6 else "black"
+                # 构建单元格文本：数值 + 可选增益行
+                if self.show_values.get():
+                    gain = self._gains[r][c]
+                    if self.show_gains.get():
+                        text = f"{val}\n×{gain:.1f}"
+                    else:
+                        text = str(val)
+                else:
+                    text = ""
                 self._cells[gi][gj].configure(
                     bg=heat_colour(norm),
                     fg=fg,
-                    text=str(val) if self.show_values.get() else "",
+                    text=text,
                 )
 
     def _redraw_grid(self):
@@ -638,10 +874,17 @@ class MatrixViewer(tk.Tk):
     # ── 数据处理（仅主线程调用）─────────────────────────────────────
     def _do_update_matrix(self, matrix: list[list[int]]):
         """在主线程中更新矩阵数据并刷新显示。"""
-        # 对原始数据应用累积的方向变换
+        # 流水线：原始 → 方向变换 → 空间滤波 → 椒盐去噪 → 去鬼影 → 滑移检测 → 死区 → 增益/调零 → 显示
         self.matrix = self._apply_all_transforms(matrix)
+        self.matrix = self._apply_spatial_filter(self.matrix)
+        if self._use_denoise.get():
+            self.matrix = self._apply_salt_pepper_removal(self.matrix)
+        if self._use_ghost_removal.get():
+            self.matrix = self._apply_ghost_removal(self.matrix)
+        self._update_slip(self.matrix)       # 基于去鬼影后的数据检测滑移
+        self.matrix = self._apply_deadzone(self.matrix)
         if self._auto_range.get():
-            display = self._apply_zero(self.matrix)
+            display = self._apply_gains_and_zero(self.matrix)
             vis_rows = self._get_visible_rows()
             vis_cols = self._get_visible_cols()
             if vis_rows and vis_cols:
@@ -656,6 +899,7 @@ class MatrixViewer(tk.Tk):
             self._ent_vmax.insert(0, str(self._vmax))
             self._sync_sliders_from_entries()
         self._apply_colours()
+        self._update_ghost_info_label()       # 更新去鬼影群数量标签
 
     def _toggle_values(self):
         self._apply_colours()
@@ -702,6 +946,477 @@ class MatrixViewer(tk.Tk):
     def _on_close(self):
         self.reader.close()
         self.destroy()
+
+    # ── 空间滤波 ───────────────────────────────────────────────────
+    def _make_gaussian_kernel(self, sigma: float) -> list[list[float]]:
+        """生成 3×3 归一化高斯卷积核。"""
+        kernel = [[0.0] * 3 for _ in range(3)]
+        total = 0.0
+        for i in range(3):
+            for j in range(3):
+                dx, dy = i - 1, j - 1
+                kernel[i][j] = math.exp(-(dx * dx + dy * dy) / (2.0 * sigma * sigma))
+                total += kernel[i][j]
+        # 归一化
+        for i in range(3):
+            for j in range(3):
+                kernel[i][j] /= total
+        return kernel
+
+    def _apply_gaussian_blur(self, matrix: list[list[int]]) -> list[list[int]]:
+        """3×3 高斯模糊 — 平滑压力分布，抑制孤立噪点。
+
+        卷积核由 σ 动态生成。σ 越大邻格权重越高，模糊越强。
+        """
+        sigma = max(0.3, self._spatial_sigma.get())
+        kernel = self._make_gaussian_kernel(sigma)
+        N = EXC_COUNT
+        result = [[0] * N for _ in range(N)]
+        for r in range(N):
+            for c in range(N):
+                total, weight = 0.0, 0.0
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < N and 0 <= nc < N:
+                            w = kernel[dr + 1][dc + 1]
+                            total += matrix[nr][nc] * w
+                            weight += w
+                result[r][c] = int(total / weight) if weight > 0 else matrix[r][c]
+        return result
+
+    def _apply_median_spatial(self, matrix: list[list[int]]) -> list[list[int]]:
+        """3×3 中值滤波 — 去除椒盐噪声（单格尖峰/凹陷）。
+
+        用邻域中值替换中心值，对孤立异常点干净利落。
+        例如：按压区域中出现一个 0 值或 ADC 毛刺尖峰，会被邻域中值覆盖。
+        """
+        N = EXC_COUNT
+        result = [[0] * N for _ in range(N)]
+        for r in range(N):
+            for c in range(N):
+                neighbors = []
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < N and 0 <= nc < N:
+                            neighbors.append(matrix[nr][nc])
+                result[r][c] = int(statistics.median(neighbors))
+        return result
+
+    def _apply_spatial_filter(self, matrix: list[list[int]]) -> list[list[int]]:
+        """根据当前空间滤波模式处理矩阵。"""
+        mode = self._spatial_mode.get()
+        if mode == "none":
+            return matrix
+        elif mode == "gaussian":
+            return self._apply_gaussian_blur(matrix)
+        elif mode == "median":
+            return self._apply_median_spatial(matrix)
+        return matrix
+
+    # ── 椒盐去噪 ───────────────────────────────────────────────────
+    def _apply_salt_pepper_removal(self, matrix: list[list[int]]) -> list[list[int]]:
+        """自适应椒盐去噪 — 检测并替换孤立的异常值。
+
+        算法（MAD 离群检测）：
+        1. 对每个单元格，取其 3×3 邻域（不含自身）
+        2. 计算邻域中位数 med 和 MAD（中位绝对偏差）
+        3. 若 |cell - med| > σ × MAD × 1.4826，则用 med 替换
+
+        优势：只在检测到异常时才替换，正常数据原样保留。
+        相比之下，中值滤波无条件替换每个格，会损失细节。
+        """
+        sigma = self._denoise_sigma.get()
+        N = EXC_COUNT
+        result = [row[:] for row in matrix]
+
+        for r in range(N):
+            for c in range(N):
+                # 收集 3×3 邻域（排除自身）
+                neighbors = []
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < N and 0 <= nc < N:
+                            neighbors.append(matrix[nr][nc])
+
+                if len(neighbors) < 3:
+                    continue
+
+                med = statistics.median(neighbors)
+                abs_devs = [abs(n - med) for n in neighbors]
+                mad = statistics.median(abs_devs)
+
+                # MAD × 1.4826 ≈ 正态分布下的标准差
+                mad_scaled = mad * 1.4826
+                if mad_scaled < 1.0:
+                    mad_scaled = 1.0   # 防止邻域全等导致除零等效
+
+                deviation = abs(matrix[r][c] - med)
+                if deviation > sigma * mad_scaled:
+                    result[r][c] = int(med)   # 异常 → 中值替换
+
+        return result
+
+    # ── 去鬼影 ─────────────────────────────────────────────────────
+    def _apply_ghost_removal(self, matrix: list[list[int]]) -> list[list[int]]:
+        """去鬼影 — 连通域分析，只保留质量最大的触摸群。
+
+        鬼影成因：电阻矩阵多触点时，电流走旁路产生虚假读数。
+
+        算法（BFS 连通域标记）：
+        1. 以活性阈值二值化矩阵
+        2. BFS 搜索所有 8-连通区域（每个区域 = 一个触摸群）
+        3. 计算每个群的总质量（群内所有格值的总和）
+        4. 只保留质量最大的群，其余全部置零
+
+        这样远处因旁路电流产生的鬼影团就会被剔除。
+        """
+        threshold = self._ghost_threshold.get()
+        N = EXC_COUNT
+
+        visited = [[False] * N for _ in range(N)]
+        components: list[tuple[int, list[tuple[int, int]]]] = []
+
+        # ---- BFS 扫描所有连通域 ----
+        for r in range(N):
+            for c in range(N):
+                if matrix[r][c] < threshold or visited[r][c]:
+                    continue
+
+                # 发现新群，BFS 扩展开
+                queue = deque()
+                queue.append((r, c))
+                visited[r][c] = True
+                cells: list[tuple[int, int]] = []
+                total_mass = 0
+
+                while queue:
+                    cr, cc = queue.popleft()
+                    cells.append((cr, cc))
+                    total_mass += matrix[cr][cc]
+
+                    # 8-连通邻域
+                    for dr in (-1, 0, 1):
+                        for dc in (-1, 0, 1):
+                            if dr == 0 and dc == 0:
+                                continue
+                            nr, nc = cr + dr, cc + dc
+                            if (0 <= nr < N and 0 <= nc < N
+                                    and matrix[nr][nc] >= threshold
+                                    and not visited[nr][nc]):
+                                visited[nr][nc] = True
+                                queue.append((nr, nc))
+
+                components.append((total_mass, cells))
+
+        # ---- 无有效群则原样返回 ----
+        if not components:
+            self._ghost_cluster_count = 0
+            return matrix
+
+        # ---- 按总质量降序：最大群排第一 ----
+        components.sort(key=lambda x: x[0], reverse=True)
+        self._ghost_cluster_count = len(components)
+
+        # ---- 只保留最大群的格值，其余置零 ----
+        kept = set(components[0][1])
+        result = [[0] * N for _ in range(N)]
+        for r, c in kept:
+            result[r][c] = matrix[r][c]
+        return result
+
+    # ── 滑移检测 ───────────────────────────────────────────────────
+    def _compute_cop(self, matrix: list[list[int]]) -> tuple[float, float, float]:
+        """计算压力中心 (CoP) 和总压力值。
+
+        返回 (col_x, row_y, total_pressure)。
+        压力中心 = Σ(pos × pressure) / Σ(pressure)
+        """
+        total = 0.0
+        sum_x = 0.0
+        sum_y = 0.0
+        N = EXC_COUNT
+        for r in range(N):
+            for c in range(N):
+                val = matrix[r][c]
+                if val > 0:
+                    sum_x += c * val
+                    sum_y += r * val
+                    total += val
+        if total < 1.0:
+            # 无有效按压，返回矩阵中心
+            return (N / 2 - 0.5, N / 2 - 0.5, 0.0)
+        return (sum_x / total, sum_y / total, total)
+
+    def _update_slip(self, matrix: list[list[int]]):
+        """从滤波后的矩阵更新滑移状态并重绘箭头。
+
+        流程：
+        1. 计算当前 CoP
+        2. 判断是否有有效按压（总压力 > 阈值）
+        3. 维护 CoP 历史轨迹
+        4. 从轨迹拟合移动方向（最近 N 帧的位移向量平均）
+        5. 对方向做 EMA 平滑
+        """
+        cop_x, cop_y, total = self._compute_cop(matrix)
+
+        # 有效按压判断：至少 2 个格有读数且总压力足够
+        active_cells = sum(1 for row in matrix for v in row if v > 0)
+        min_total = 200  # 总压力阈值，避免噪声触发
+
+        was_touching = self._is_touching
+        self._is_touching = (active_cells >= 2 and total >= min_total)
+
+        if not self._is_touching:
+            if was_touching:
+                # 刚松手，清空历史
+                self._cop_history.clear()
+                self._slip_dx = 0.0
+                self._slip_dy = 0.0
+                self._slip_speed = 0.0
+            self._draw_slip_arrow()
+            return
+
+        # 记录当前 CoP
+        self._cop_history.append((cop_x, cop_y))
+
+        if len(self._cop_history) < 2:
+            self._draw_slip_arrow()
+            return
+
+        # 从历史轨迹计算瞬时速度向量（最近几帧的位移）
+        # 取最近的几个点做差分平均
+        hist = list(self._cop_history)
+        diffs = []
+        for i in range(1, len(hist)):
+            dx = hist[i][0] - hist[i - 1][0]
+            dy = hist[i][1] - hist[i - 1][1]
+            diffs.append((dx, dy))
+
+        if not diffs:
+            self._draw_slip_arrow()
+            return
+
+        # 平均速度（最近更多的权重）
+        instant_dx = 0.0
+        instant_dy = 0.0
+        total_w = 0.0
+        for i, (dx, dy) in enumerate(diffs):
+            w = i + 1  # 越新的权重越高
+            instant_dx += dx * w
+            instant_dy += dy * w
+            total_w += w
+        instant_dx /= total_w
+        instant_dy /= total_w
+
+        speed = math.sqrt(instant_dx * instant_dx + instant_dy * instant_dy)
+
+        # EMA 平滑方向（避免箭头抖动）
+        alpha = 0.35
+        self._slip_dx = alpha * instant_dx + (1.0 - alpha) * self._slip_dx
+        self._slip_dy = alpha * instant_dy + (1.0 - alpha) * self._slip_dy
+        self._slip_speed = speed
+
+        self._cop_x = cop_x
+        self._cop_y = cop_y
+        self._draw_slip_arrow()
+
+    def _draw_slip_arrow(self):
+        """在滑移面板 Canvas 上绘制方向箭头。"""
+        cw = self._slip_canvas
+        cw.delete("all")
+
+        w = 190
+        h = 250
+        cx, cy = w // 2, h // 2 - 15
+
+        if not self._is_touching or self._slip_speed < 0.01:
+            # 空闲状态：灰色圆 + 中心点
+            r = 45
+            cw.create_oval(cx - r, cy - r, cx + r, cy + r,
+                           outline="#cccccc", width=3, dash=(4, 4))
+            cw.create_oval(cx - 4, cy - 4, cx + 4, cy + 4,
+                           fill="#cccccc", outline="")
+            return
+
+        # 方向向量
+        mag = math.sqrt(self._slip_dx * self._slip_dx +
+                        self._slip_dy * self._slip_dy)
+        if mag < 0.005:
+            # 有按压但几乎无移动
+            r = 45
+            cw.create_oval(cx - r, cy - r, cx + r, cy + r,
+                           outline="#aaaaaa", width=3)
+            cw.create_oval(cx - 5, cy - 5, cx + 5, cy + 5,
+                           fill="#4CAF50", outline="")
+            cw.create_text(cx, cy - r - 15, text="静止",
+                           fill="#888888", font=("微软雅黑", 9))
+            return
+
+        dx = self._slip_dx / mag
+        dy = self._slip_dy / mag
+
+        # 箭头长度：速度越快越长，但有上下限
+        arrow_len = max(18, min(55, self._slip_speed * 30 + 15))
+
+        # 速度等级决定颜色（慢→绿，中→橙，快→红）
+        speed_norm = min(1.0, self._slip_speed / 2.0)
+        if speed_norm < 0.33:
+            color = "#4CAF50"      # 绿
+        elif speed_norm < 0.66:
+            color = "#FF9800"      # 橙
+        else:
+            color = "#F44336"      # 红
+
+        # 外圆
+        r = 45
+        cw.create_oval(cx - r, cy - r, cx + r, cy + r,
+                       outline="#dddddd", width=2, fill="#fafafa")
+
+        # 十字参考线
+        cw.create_line(cx - 35, cy, cx + 35, cy, fill="#e0e0e0", width=1)
+        cw.create_line(cx, cy - 35, cx, cy + 35, fill="#e0e0e0", width=1)
+
+        # 主方向箭头
+        ex = cx + dx * arrow_len
+        ey = cy + dy * arrow_len
+        cw.create_line(cx, cy, ex, ey,
+                       arrow=tk.LAST, arrowshape=(14, 18, 7),
+                       fill=color, width=5, capstyle=tk.ROUND)
+
+        # 起点圆点
+        cw.create_oval(cx - 5, cy - 5, cx + 5, cy + 5,
+                       fill=color, outline="")
+
+        # 轨迹尾巴（显示最近的移动路径）
+        hist = list(self._cop_history)
+        if len(hist) >= 3:
+            # 在箭头坐标系中缩放历史点
+            scale = 10.0  # 每格 = 10 像素
+            points = []
+            for hx, hy in hist[-8:]:
+                px = cx + (hx - self._cop_x) * scale
+                py = cy + (hy - self._cop_y) * scale
+                # 裁剪到圆内
+                dist = math.sqrt((px - cx) ** 2 + (py - cy) ** 2)
+                if dist > r - 5:
+                    px = cx + (px - cx) * (r - 5) / dist
+                    py = cy + (py - cy) * (r - 5) / dist
+                points.extend([px, py])
+            if len(points) >= 4:
+                cw.create_line(*points, fill="#bbbbbb", width=2, smooth=True)
+
+        self._update_slip_labels()
+
+    def _update_slip_labels(self):
+        """更新滑移面板的文字标签。"""
+        if not self._is_touching:
+            self._lbl_slip_dir.config(text="等待按压…", foreground="gray")
+            self._lbl_slip_speed.config(text="")
+            return
+
+        mag = math.sqrt(self._slip_dx * self._slip_dx +
+                        self._slip_dy * self._slip_dy)
+        if mag < 0.005:
+            self._lbl_slip_dir.config(text="● 静止", foreground="#888888")
+            self._lbl_slip_speed.config(text="")
+            return
+
+        # 方向文字
+        dx = self._slip_dx / mag
+        dy = self._slip_dy / mag
+        angle = math.degrees(math.atan2(-dy, dx))  # 上为负
+
+        if -22.5 <= angle < 22.5:
+            dtext = "→ 右"
+        elif 22.5 <= angle < 67.5:
+            dtext = "↗ 右上"
+        elif 67.5 <= angle < 112.5:
+            dtext = "↑ 上"
+        elif 112.5 <= angle < 157.5:
+            dtext = "↖ 左上"
+        elif angle >= 157.5 or angle < -157.5:
+            dtext = "← 左"
+        elif -157.5 <= angle < -112.5:
+            dtext = "↙ 左下"
+        elif -112.5 <= angle < -67.5:
+            dtext = "↓ 下"
+        else:
+            dtext = "↘ 右下"
+
+        self._lbl_slip_dir.config(text=dtext, foreground="#333333")
+        self._lbl_slip_speed.config(
+            text=f"速率 {self._slip_speed:.2f} 格/帧")
+
+    def _apply_deadzone(self, matrix: list[list[int]]) -> list[list[int]]:
+        """死区阈值 — 低于阈值的读数强制归零，消除底噪伪触点。"""
+        th = self._deadzone.get()
+        if th <= 0:
+            return matrix
+        return [
+            [val if val >= th else 0 for val in row]
+            for row in matrix
+        ]
+
+    # ── 滤波 UI 回调 ───────────────────────────────────────────────
+    def _on_filter_param_change(self, *_):
+        self._update_deadzone_label()
+        self._apply_colours()
+
+    def _update_deadzone_label(self):
+        self._lbl_deadzone.config(text=str(self._deadzone.get()))
+
+    def _on_spatial_mode_change(self):
+        """空间滤波模式切换时立即刷新显示。"""
+        self._apply_colours()
+
+    def _on_denoise_toggle(self):
+        """椒盐去噪开关切换。"""
+        self._apply_colours()
+
+    def _on_denoise_sigma_change(self, value):
+        """椒盐去噪 σ 阈值滑动条回调。"""
+        sigma = max(1.0, int(float(value)) / 10.0)
+        self._denoise_sigma.set(sigma)
+        self._lbl_denoise.config(text=f"{sigma:.1f}")
+        self._apply_colours()
+
+    def _on_ghost_toggle(self):
+        """去鬼影开关切换。"""
+        self._apply_colours()
+
+    def _on_ghost_threshold_change(self, value):
+        """去鬼影活性阈值滑动条回调。"""
+        th = int(float(value))
+        self._ghost_threshold.set(th)
+        self._lbl_ghost.config(text=str(th))
+        self._apply_colours()
+
+    def _update_ghost_info_label(self):
+        """更新去鬼影信息标签 — 显示检测到的群数量。"""
+        if not self._use_ghost_removal.get():
+            self._lbl_ghost_info.config(text="")
+            return
+        n = self._ghost_cluster_count
+        if n == 0:
+            self._lbl_ghost_info.config(text="未检测到触摸群", foreground="gray")
+        elif n == 1:
+            self._lbl_ghost_info.config(text="✓ 1 个群（无鬼影）", foreground="#4CAF50")
+        else:
+            self._lbl_ghost_info.config(
+                text=f"⚠ {n} 个群 → 已剔除 {n - 1} 个鬼影",
+                foreground="#FF5722")
+
+    def _on_sigma_change(self, value):
+        """高斯 σ 滑动条回调。"""
+        sigma = max(0.3, int(float(value)) / 100.0)
+        self._spatial_sigma.set(sigma)
+        self._lbl_sigma.config(text=f"{sigma:.2f}")
+        self._apply_colours()
 
 
 # ── 入口 ─────────────────────────────────────────────────────────────

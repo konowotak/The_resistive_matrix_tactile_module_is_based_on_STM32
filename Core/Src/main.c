@@ -98,6 +98,18 @@ static const uint16_t sm_exc_pins[MATRIX_EXC_COUNT] = {
     GPIO_PIN_11           /* exc index 7 → PB11 */
 };
 
+/* Pin numbers for register-level CRL/CRH manipulation (0..15) */
+static const uint8_t sm_exc_pin_nums[MATRIX_EXC_COUNT] = {
+    7U,   /* PB7  → CRL[31:28] */
+    6U,   /* PB6  → CRL[27:24] */
+    5U,   /* PB5  → CRL[23:20] */
+    4U,   /* PB4  → CRL[19:16] */
+    0U,   /* PB0  → CRL[3:0]   */
+    1U,   /* PB1  → CRL[7:4]   */
+    10U,  /* PB10 → CRH[11:8]  */
+    11U   /* PB11 → CRH[15:12] */
+};
+
 /* ---- ADC channel map (PA0→CH0 .. PA7→CH7, sequential) ---- */
 static const uint8_t sm_adc_chans[MATRIX_ADC_COUNT] = {
     ADC_CHANNEL_0, ADC_CHANNEL_1, ADC_CHANNEL_2, ADC_CHANNEL_3,
@@ -143,18 +155,37 @@ void SM_UserTick(void)
 {
     uint16_t val;
     uint16_t off;
+    uint8_t  pin;       /* pin number 0..15 for CRL/CRH ops */
+    uint32_t shift;     /* bit shift into CRL/CRH */
 
     switch (sm_step) {
 
-    /* -------- Step 0: close all excitation GPIOs -------- */
+    /* -------- Step 0: all excitation pins → input pull-down (~40kΩ to GND) ----
+     *  Pull-down provides a deterministic bleed path for ghost currents while
+     *  being ~40 kΩ — high enough not to attenuate real signals, low enough
+     *  to suppress crosstalk through the conductive material between touches. */
     case SM_CLOSE_ALL:
-        HAL_GPIO_WritePin(GPIOB, MATRIX_ALL_PINS, GPIO_PIN_RESET);
+        /* Clear ODR to select pull-down (ODR=0 → PD, ODR=1 → PU) */
+        GPIOB->BRR = MATRIX_ALL_PINS;
+        /* CRL: PB0,1,4,5,6,7 → 0x8 (input pull-up/down), preserve PB2,3 */
+        GPIOB->CRL = (GPIOB->CRL & ~0xFFFF00FFUL) | 0x88880088UL;
+        /* CRH: PB10,11 → 0x8 (input pull-up/down), preserve PB8,9,12-15 */
+        GPIOB->CRH = (GPIOB->CRH & ~0x0000FF00UL) | 0x00008800UL;
         sm_step = SM_OPEN_ONE;
         break;
 
-    /* -------- Step 1: open current excitation GPIO -------- */
+    /* -------- Step 1: current excitation pin → output HIGH -------- */
     case SM_OPEN_ONE:
-        HAL_GPIO_WritePin(GPIOB, sm_exc_pins[sm_exc_idx], GPIO_PIN_SET);
+        /* Pre-set output data HIGH via BSRR (safe while pin is input) */
+        GPIOB->BSRR = sm_exc_pins[sm_exc_idx];
+        /* Switch pin mode to push-pull output 50 MHz (CNF=00 MODE=11 → 0x3) */
+        pin   = sm_exc_pin_nums[sm_exc_idx];
+        shift = (pin & 0x8U) ? ((pin - 8U) * 4U) : (pin * 4U);
+        if (pin < 8U) {
+            GPIOB->CRL = (GPIOB->CRL & ~(0xFUL << shift)) | (0x3UL << shift);
+        } else {
+            GPIOB->CRH = (GPIOB->CRH & ~(0xFUL << shift)) | (0x3UL << shift);
+        }
         sm_step = SM_SETTLE;
         break;
 
@@ -202,7 +233,7 @@ void SM_UserTick(void)
             sm_adc_idx = 0U;
             sm_step = SM_NEXT_EXC;
         } else {
-            sm_step = SM_ADC_START;   /* next ADC channel, same excitation */
+            sm_step = SM_SETTLE;      /* settle before next ADC channel */
         }
         break;
 
@@ -297,10 +328,6 @@ int main(void)
     }
 
   /* USER CODE END 3 */
-  }
-  /* USER CODE BEGIN 4 */
-
-  /* USER CODE END 4 */
 }
 
 /**
@@ -345,6 +372,12 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 }
+
+/* USER CODE BEGIN 4 */
+
+} /* ← main() closing brace — CubeMX drops this, keep here to survive regen */
+
+/* USER CODE END 4 */
 
 /**
   * @brief  This function is executed in case of error occurrence.
